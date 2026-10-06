@@ -7,17 +7,32 @@ import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  readSqliteSessionArchivePruning,
+  withSqliteSessionPageReclamation,
+} from "../config/sessions/session-accessor.sqlite-page-reclamation.js";
+import { restoreSessionColdTranscript } from "../config/sessions/session-cold-storage.js";
+import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { readResidentSessionRow } from "./session-row-projection-materialize.js";
 import { withIncognitoSessionRow } from "./session-row-projection-read.js";
 import type { Row } from "./session-row-projection-record.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { presentSessionRow } from "./session-utils-row.js";
 import * as sessionStoreLookup from "./session-utils-store-lookup.js";
+import { reportPlacementTransition } from "./worker-environments/placement-record.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 // Two retained private actors plus shared-state reads need three broker slots.
 vi.mock("node:os", async (importOriginal) => ({
@@ -28,6 +43,7 @@ vi.mock("node:os", async (importOriginal) => ({
 it("materializes actor-prepared private entries and lineage without host SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = { agents: { entries: { main: {}, work: {} } } };
+    const incognitoReads = await import("./session-row-projection-read.js");
     openOpenClawStateDatabase({ env: state.env });
     const authority = { assertCurrent() {} };
     const actor = await captureOpenClawAgentDatabaseExecution({
@@ -199,6 +215,215 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
       } finally {
         sql.restore();
       }
+      await actor.sessions.create(authority, {
+        sessionKey: "agent:main:dashboard:incognito-creator",
+        entry: {
+          sessionId: "private-creator",
+          updatedAt: Date.now(),
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: "private-author",
+            label: "Private author",
+          },
+        },
+      });
+      const placements = createWorkerSessionPlacementStore();
+      const projection = await createSessionRowProjection({
+        cfg,
+        placementFactsReader: placements,
+      });
+      let placement: Awaited<ReturnType<typeof placements.startDispatch>> | undefined;
+      const readPlacement = placements.readProjection.bind(placements);
+      const placementGap = vi
+        .spyOn(placements, "readProjection")
+        .mockImplementation(async (...args) => {
+          const snapshot = await readPlacement(...args);
+          if (!placement && args[0].includes("prepared-row")) {
+            placement = await placements.startDispatch({
+              agentId: actor.agentId,
+              sessionKey: key,
+              sessionId: "prepared-row",
+            });
+            reportPlacementTransition(undefined, placement);
+          }
+          return snapshot;
+        });
+      try {
+        await withIncognitoSessionBinding({ actor }, async () => {
+          let presentations = 0;
+          const describe = (selectedKeys = [key, durableRoot]) =>
+            withReadySessionRows(
+              projection,
+              () =>
+                selectedKeys.map((selectedKey) => ({ agentId: actor.agentId, key: selectedKey })),
+              (read) => {
+                presentations++;
+                return selectedKeys.map((selectedKey) => {
+                  const row = read.describe({ agentId: actor.agentId, key: selectedKey });
+                  assert(row);
+                  expect(
+                    projection.describe(
+                      {
+                        agentId: actor.agentId,
+                        key: "agent:main:dashboard:incognito-other-target",
+                      },
+                      row,
+                    ),
+                  ).toBeUndefined();
+                  return read.present(row, { now: Date.now() });
+                });
+              },
+            );
+          const described = await describe();
+          expect(described.map((row) => row.key)).toEqual([key, durableRoot]);
+          expect(described[0]?.placement?.state).toBe("requested");
+          expect(presentations).toBe(1);
+          const readRow = actor.sessions.readRow.bind(actor.sessions);
+          const privateGap = vi
+            .spyOn(actor.sessions, "readRow")
+            .mockImplementationOnce(async (...args) => {
+              const result = await readRow(...args);
+              assert(placement);
+              placement = await placements.transition({
+                sessionId: "prepared-row",
+                from: "requested",
+                to: "provisioning",
+                expectedGeneration: placement.generation,
+              });
+              reportPlacementTransition(undefined, placement);
+              return result;
+            });
+          try {
+            expect((await describe([key]))[0]?.placement?.state).toBe("provisioning");
+            expect(presentations).toBe(2);
+          } finally {
+            privateGap.mockRestore();
+          }
+          // Observe the read after the independent placement writer's grants have settled.
+          const statements = observeHostDataSql();
+          try {
+            expect((await describe([key]))[0]?.placement?.state).toBe("provisioning");
+            expect(projection.listCreatedActors()).toContainEqual(
+              expect.objectContaining({ id: "private-author" }),
+            );
+            expect(
+              projection
+                .findBySessionId({ sessionId: "prepared-row", federated: true })
+                .map((row) => row.key),
+            ).toEqual([key]);
+            expect(() => projection.snapshot({ agentId: actor.agentId, key })).toThrow(
+              "awaited row preparation",
+            );
+            for (const includeMembership of [false, true]) {
+              let escaped: (() => void) | undefined;
+              await sessionStoreLookup.withGatewaySessionStoreTarget(
+                { cfg, agentId: actor.agentId, key, env: state.env, includeMembership },
+                (target, membership, assertCurrent) => {
+                  escaped = assertCurrent;
+                  expect(target.store[key]?.sessionId).toBe("prepared-row");
+                  expect(membership.has(key)).toBe(includeMembership);
+                },
+              );
+              expect(escaped).toBeDefined();
+              expect(() => escaped?.()).toThrow("no longer retained");
+            }
+            expect(
+              projection.selectEntries().some((row) => row.key === key || row.key === durableRoot),
+            ).toBe(false);
+            await restoreSessionColdTranscript({
+              agentId: actor.agentId,
+              storePath: actor.path,
+              sessionKey: key,
+              sessionId: "prepared-row",
+            });
+            expect(
+              await readSqliteSessionArchivePruning({
+                agentId: actor.agentId,
+                path: actor.path,
+                env: state.env,
+              }),
+            ).toBeNull();
+            await expect(
+              withSqliteSessionPageReclamation(
+                { agentId: actor.agentId, path: actor.path, env: state.env },
+                async () => undefined,
+              ),
+            ).rejects.toThrow("no disk pages or archives");
+            expect(statements.queries).toEqual([]);
+          } finally {
+            statements.restore();
+          }
+          const beforeCleanup = presentations;
+          const prepareRows = incognitoReads.withBoundIncognitoSessionRows;
+          const cleanupPlacement = vi
+            .spyOn(incognitoReads, "withBoundIncognitoSessionRows")
+            .mockImplementationOnce(async <T>(...args: Parameters<typeof prepareRows<T>>) => {
+              const result = await prepareRows(...args);
+              assert(placement);
+              placement = await placements.fail({
+                sessionId: "prepared-row",
+                expectedGeneration: placement.generation,
+                recoveryError: "Synthetic placement cleanup change",
+              });
+              reportPlacementTransition(undefined, placement);
+              return result;
+            });
+          try {
+            await expect.soft(describe([key])).rejects.toThrow("changed during cleanup");
+            expect(presentations).toBe(beforeCleanup + 1);
+          } finally {
+            cleanupPlacement.mockRestore();
+          }
+        });
+      } finally {
+        placementGap.mockRestore();
+        projection.dispose();
+      }
+      for (const change of ["abort", "config", "dispose"] as const) {
+        let currentConfig = cfg;
+        const work = new AsyncWorkScope();
+        const readProjection = await createSessionRowProjection({
+          cfg,
+          getConfig: () => currentConfig,
+        });
+        const prepareRows = incognitoReads.withBoundIncognitoSessionRows;
+        const cleanup = vi
+          .spyOn(incognitoReads, "withBoundIncognitoSessionRows")
+          .mockImplementationOnce(async <T>(...args: Parameters<typeof prepareRows<T>>) => {
+            const result = await prepareRows(...args);
+            if (change === "abort") {
+              work.beginClose(new Error("Caller retired during cleanup"));
+            } else if (change === "config") {
+              currentConfig = { ...cfg };
+              sessionChanges.emit({ all: true, scope: "config-presentation" });
+            } else {
+              readProjection.dispose();
+            }
+            return result;
+          });
+        const consume = vi.fn(() => "private result");
+        try {
+          await expect
+            .soft(
+              work.run(() =>
+                withIncognitoSessionBinding({ actor }, () =>
+                  withReadySessionRows(
+                    readProjection,
+                    () => [{ agentId: actor.agentId, key }],
+                    consume,
+                  ),
+                ),
+              ),
+            )
+            .rejects.toThrow();
+          expect(consume).toHaveBeenCalledTimes(1);
+        } finally {
+          cleanup.mockRestore();
+          readProjection.dispose();
+          await work.drain();
+        }
+      }
       const original = actor.acp.prepareEntryRead.bind(actor.acp);
       const gap = vi.spyOn(actor.acp, "prepareEntryRead").mockImplementationOnce(async (params) => {
         const prepared = await original(params);
@@ -216,6 +441,81 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
         ).rejects.toThrow("snapshot changed");
       } finally {
         gap.mockRestore();
+      }
+      for (const change of ["target", "related", "acp", "lookup", "durable"] as const) {
+        const retain = actor.sessions.withSharedState.bind(actor.sessions);
+        let first = true;
+        const settling = vi
+          .spyOn(actor.sessions, "withSharedState")
+          .mockImplementation(<T>(work: () => Promise<T>) => {
+            const changeAfterCleanup = first;
+            first = false;
+            return retain(work).then(async (result) => {
+              if (changeAfterCleanup) {
+                if (change === "acp") {
+                  sessionChanges.emit({ agentId: actor.agentId, sessionKey: otherRoot });
+                } else if (change === "durable") {
+                  replaceSessionEntrySync(
+                    { agentId: "work", sessionKey: durableParentKey, env: state.env },
+                    {
+                      ...parent.entry,
+                      incognito: undefined,
+                      sessionId: "durable-parent",
+                      updatedAt: Date.now(),
+                      label: "Changed durable ancestor during cleanup",
+                    },
+                  );
+                } else {
+                  const changedActor = change === "related" ? other : actor;
+                  await withIncognitoSessionBinding({ actor: changedActor }, () =>
+                    patchSessionEntryCore(
+                      {
+                        agentId: changedActor.agentId,
+                        storePath: changedActor.path,
+                        sessionKey: change === "related" ? otherParentKey : otherRoot,
+                        env: state.env,
+                      },
+                      () => ({ label: `Changed during ${change} cleanup` }),
+                    ),
+                  );
+                }
+              }
+              return result;
+            });
+          });
+        const consume = vi.fn(() => "prepared private data");
+        try {
+          const result =
+            change === "lookup"
+              ? withIncognitoSessionBinding({ actor }, () =>
+                  sessionStoreLookup.withGatewaySessionStoreTarget(
+                    { cfg, agentId: actor.agentId, key: otherRoot, env: state.env },
+                    consume,
+                  ),
+                )
+              : withIncognitoSessionRow(
+                  {
+                    actor,
+                    authority,
+                    cfg,
+                    env: state.env,
+                    key: change === "durable" ? durableRoot : otherRoot,
+                  },
+                  consume,
+                );
+          await expect
+            .soft(result)
+            .rejects.toThrow(
+              change === "acp"
+                ? "Prepared ACP session changed"
+                : change === "durable"
+                  ? "Session entry changed during read"
+                  : "snapshot changed",
+            );
+          expect(consume).toHaveBeenCalledTimes(1);
+        } finally {
+          settling.mockRestore();
+        }
       }
       const deliveryBorrow = await captureOpenClawAgentDatabaseExecution({
         kind: "ephemeral",

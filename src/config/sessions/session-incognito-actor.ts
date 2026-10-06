@@ -133,6 +133,7 @@ export function createIncognitoSessionFacts(
   };
   const { claim, captureSnapshot } = createIncognitoSessionClaims({
     identity,
+    assertReadable: assertAdmittedCurrent,
     current,
     readTopologyRevision: () => topologyRevision,
     withGrant,
