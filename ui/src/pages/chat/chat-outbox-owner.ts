@@ -2,7 +2,7 @@ import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { chatQueueOrderKey, compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
-  chatOutboxOwners as owners,
+  chatOutboxAttentionOwners,
   notifyChatOutboxAttentionChanges,
   outboxOwnerKey,
   storedChatOutboxItemNeedsReview,
@@ -694,11 +694,13 @@ class ChatOutboxGatewayOwner {
           owners.get(this.ownerGatewayKey) === this
         ) {
           owners.delete(this.ownerGatewayKey);
+          chatOutboxAttentionOwners.delete(this.ownerGatewayKey);
         }
       });
     }
   }
 }
+const owners = new Map<string, ChatOutboxGatewayOwner>();
 const hostOwners = new WeakMap<Host, ChatOutboxGatewayOwner>();
 const subscriptions = new WeakMap<
   Composer,
@@ -708,6 +710,7 @@ export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
   const key = outboxOwnerKey(host);
   const owner = owners.get(key) ?? new ChatOutboxGatewayOwner(key);
   owners.set(key, owner);
+  chatOutboxAttentionOwners.set(key, owner);
   owner.adoptSubscriptions(host);
   return owner;
 }

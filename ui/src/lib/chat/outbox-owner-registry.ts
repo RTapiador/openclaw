@@ -1,12 +1,18 @@
 import { notifyListeners } from "../../../../src/shared/listeners.js";
 import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
-import type { chatOutboxOwner } from "../../pages/chat/chat-outbox-owner.ts";
 import type { ChatQueueItem } from "./chat-types.ts";
+import type { StoredChatOutboxScope } from "./outbox-store-scope.ts";
 import type { ChatComposerScope } from "./outbox-store.ts";
 
 // Presentation can consult the existing owner without loading the chat send graph.
-export const chatOutboxOwners = new Map<string, ReturnType<typeof chatOutboxOwner>>();
+export const chatOutboxAttentionOwners = new Map<
+  string,
+  {
+    attentionRevision: number;
+    needsReview(scope: StoredChatOutboxScope, item: ChatQueueItem): boolean;
+  }
+>();
 const storageIds = new WeakMap<Storage, number>();
 let nextStorageId = 0;
 const attentionListeners = new Set<(ownerKey: string) => void>();

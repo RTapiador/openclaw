@@ -7,7 +7,7 @@ import { compareChatQueueOrder } from "./chat-queue-order.ts";
 import type { ChatQueueItem } from "./chat-types.ts";
 import type { DurableChatDraftPresence } from "./composer-draft-store.runtime.ts";
 import {
-  chatOutboxOwners,
+  chatOutboxAttentionOwners,
   outboxOwnerKey,
   storedChatOutboxItemNeedsReview,
   subscribeChatOutboxAttentionChanges,
@@ -46,7 +46,7 @@ export function createStoredChatOutboxReader() {
     inputs: readonly unknown[];
     summary: ReturnType<typeof summarizeStoredChatOutboxes>["summary"];
     signature: string;
-    attentionOwner: ReturnType<typeof chatOutboxOwners.get>;
+    attentionOwner: ReturnType<typeof chatOutboxAttentionOwners.get>;
     attentionRevision: number | undefined;
   } | null = null;
   let lastState: StoredOutboxReaderScope | undefined;
@@ -144,7 +144,7 @@ export function createStoredChatOutboxReader() {
         if (!lastState || key !== outboxOwnerKey(lastState)) {
           return;
         }
-        const attentionOwner = chatOutboxOwners.get(key);
+        const attentionOwner = chatOutboxAttentionOwners.get(key);
         const previous = cached;
         if (
           previous &&
@@ -186,7 +186,7 @@ export function createStoredChatOutboxReader() {
       }
       void loadPresence();
       const inputs = readInputs(state);
-      const attentionOwner = chatOutboxOwners.get(outboxOwnerKey(state));
+      const attentionOwner = chatOutboxAttentionOwners.get(outboxOwnerKey(state));
       const previous = cached;
       if (
         previous &&
@@ -279,7 +279,7 @@ function summarizeStoredChatOutboxes(
   const idsByScope = new Map<string, { all: Set<string>; attention: Set<string> }>();
   const drafts = new Map<string, DurableChatDraftPresence>();
   const scopes = new Map<string, StoredChatOutboxScope>();
-  const attentionOwner = chatOutboxOwners.get(outboxOwnerKey(state));
+  const attentionOwner = chatOutboxAttentionOwners.get(outboxOwnerKey(state));
   for (const { scope, session } of listStoredComposerRows(state)) {
     const scopeKey = storedChatOutboxScopeKey(scope);
     scopes.set(scopeKey, scope);
