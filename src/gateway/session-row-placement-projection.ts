@@ -438,7 +438,14 @@ export function createSessionRowPlacementProjection(
           preparedQueries,
           (privateRows) => {
             assertActive();
-            if (!placementCurrent() || projection.state.cfg !== cfg) {
+            const privateIds = [...privateRows.values()].flatMap((row) =>
+              row?.entry ? [row.entry.sessionId] : [],
+            );
+            if (
+              !placementCurrent() ||
+              projection.state.cfg !== cfg ||
+              missing(privateIds).some((id) => !placement?.has(id))
+            ) {
               return stalePrivatePreparation;
             }
             const previous = exact;

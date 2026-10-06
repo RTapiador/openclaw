@@ -24,7 +24,7 @@ import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-ex
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withReadySessionRows } from "./session-row-prepared-read.js";
+import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { readResidentSessionRow } from "./session-row-projection-materialize.js";
 import { withIncognitoSessionRow } from "./session-row-projection-read.js";
 import type { Row } from "./session-row-projection-record.js";
@@ -273,6 +273,43 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
         });
       try {
         await withIncognitoSessionBinding({ actor }, async () => {
+          const appearingKey = "agent:main:dashboard:incognito-created-during-preparation";
+          const readBeforeCreation = actor.sessions.readRow.bind(actor.sessions);
+          const creationGap = vi
+            .spyOn(actor.sessions, "readRow")
+            .mockImplementationOnce(async (...args) => {
+              await actor.sessions.create(authority, {
+                sessionKey: appearingKey,
+                entry: {
+                  sessionId: "created-during-preparation",
+                  incognito: true,
+                  updatedAt: Date.now(),
+                },
+              });
+              const createdPlacement = await placements.startDispatch({
+                agentId: actor.agentId,
+                sessionKey: appearingKey,
+                sessionId: "created-during-preparation",
+              });
+              reportPlacementTransition(undefined, createdPlacement);
+              return readBeforeCreation(...args);
+            });
+          const consumeAppearing = vi.fn((read: SessionRowReadView) => {
+            const row = read.describe({ agentId: actor.agentId, key: appearingKey });
+            assert(row);
+            return read.present(row);
+          });
+          try {
+            const appearing = await withReadySessionRows(
+              projection,
+              () => [{ agentId: actor.agentId, key: appearingKey }],
+              consumeAppearing,
+            );
+            expect(appearing.placement?.state).toBe("requested");
+            expect(consumeAppearing).toHaveBeenCalledTimes(1);
+          } finally {
+            creationGap.mockRestore();
+          }
           let presentations = 0;
           const describe = (selectedKeys = [key, durableRoot]) =>
             withReadySessionRows(

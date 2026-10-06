@@ -4,6 +4,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmissions } from "../../state/openclaw-agent-write-admission.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
 import { captureSessionEntryWorkerRequest } from "./session-entry-read-request.js";
 import type {
   PreparedSessionEntryWorkerRead,
@@ -40,7 +41,7 @@ export function captureSessionEntryNativeMutationWitness(
             revision === undefined ||
             readSqliteNativeMutationRevision(native.db) !== revision))
       ) {
-        throw new Error("Session entry changed during read");
+        throw new SessionEntryChangedDuringReadError();
       }
     }
   };
@@ -127,7 +128,7 @@ export async function withOrderedSessionEntriesInWorker<T>(
           }
           assertNativeCurrent();
           if (changed) {
-            throw new Error("Session entry changed during read");
+            throw new SessionEntryChangedDuringReadError();
           }
         };
         try {

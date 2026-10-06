@@ -39,7 +39,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
-import { captureSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   normalizeResolvedMaintenanceConfigInput,
@@ -320,11 +320,12 @@ export function applySessionEntryMaintenance(
     archiveDirectory: string;
     forceMaintenance?: boolean;
     maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
-    skipMaintenance?: boolean;
+    preservation?: () => SessionMaintenancePreservationSnapshot;
+    refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot;
     storePath: string;
   },
 ): SessionEntryMaintenancePlan {
-  if (params.skipMaintenance) {
+  if (!params.preservation) {
     return emptySessionEntryMaintenancePlan();
   }
   const maintenance = params.maintenanceConfig
@@ -333,8 +334,12 @@ export function applySessionEntryMaintenance(
   if (maintenance.mode === "warn") {
     return emptySessionEntryMaintenancePlan();
   }
-  return applySessionEntryMaintenanceInDatabase(database, { ...params, maintenance }, () =>
-    captureSessionMaintenancePreservation(params.storePath),
+  return applySessionEntryMaintenanceInDatabase(
+    database,
+    { ...params, maintenance },
+    params.preservation,
+    undefined,
+    params.refreshCandidates,
   );
 }
 
