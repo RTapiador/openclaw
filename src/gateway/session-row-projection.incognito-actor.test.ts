@@ -240,8 +240,8 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
         "agent:work:subagent:incognito-missing-child",
         "agent:work:subagent:missing-durable-child",
       ];
-      for (const child of missingChildren) {
-        seedChild(child);
+      for (const missingChildKey of missingChildren) {
+        seedChild(missingChildKey);
       }
       const placements = createWorkerSessionPlacementStore();
       const projection = await createSessionRowProjection({
@@ -282,7 +282,7 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
               (read) => {
                 presentations++;
                 if (selectedKeys.includes(key)) {
-                  for (const [child, storePath, sessionId] of [
+                  for (const [preparedChildKey, storePath, sessionId] of [
                     [registryChild, other.path, "registry-child"],
                     [
                       durableChild,
@@ -290,7 +290,7 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
                       "durable-registry-child",
                     ],
                   ] as const) {
-                    expect(read.selectEntries({ key: child })).toMatchObject([
+                    expect(read.selectEntries({ key: preparedChildKey })).toMatchObject([
                       {
                         agentId: "work",
                         storeTarget: { agentId: "work", storePath },
@@ -300,8 +300,8 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
                       },
                     ]);
                   }
-                  for (const child of missingChildren) {
-                    expect(read.selectEntries({ key: child })).toEqual([]);
+                  for (const missingChildKey of missingChildren) {
+                    expect(read.selectEntries({ key: missingChildKey })).toEqual([]);
                   }
                 }
                 return selectedKeys.map((selectedKey) => {

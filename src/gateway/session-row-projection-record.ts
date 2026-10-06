@@ -327,7 +327,10 @@ export function createIncognitoSessionRow(params: {
             relatedRows: params.prepared.relatedRows,
             entries: {
               ...Object.fromEntries(
-                Object.entries(params.prepared.relatedRows).map(([key, row]) => [key, row.entry]),
+                Object.entries(params.prepared.relatedRows).map(([relatedKey, relatedRow]) => [
+                  relatedKey,
+                  relatedRow.entry,
+                ]),
               ),
               [key]: storedEntry,
             },

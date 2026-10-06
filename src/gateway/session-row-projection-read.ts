@@ -587,8 +587,8 @@ function withIncognitoSessionRows<T>(
     for (const acp of resources.acp.toReversed()) {
       acp.release();
     }
-    for (const release of resources.releases.toReversed()) {
-      release();
+    for (const releaseResource of resources.releases.toReversed()) {
+      releaseResource();
     }
   };
   return retain(0).then(
