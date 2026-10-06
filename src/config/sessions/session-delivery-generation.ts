@@ -24,10 +24,7 @@ import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-
 import type { SessionDeliveryGeneration } from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
-import {
-  captureSessionStoreReadCandidate,
-  isSessionStoreReadCandidateCurrent,
-} from "./session-store-read-candidates.js";
+import { isSessionStoreReadCandidateCurrent } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 
 class SessionDeliveryGenerationRevokedError extends Error {

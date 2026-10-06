@@ -17,10 +17,7 @@ import {
   captureIncognitoSessionBinding,
   type IncognitoSessionBinding,
 } from "./session-incognito-binding.js";
-import {
-  captureSessionStoreReadCandidate,
-  isSessionStoreReadCandidateCurrent,
-} from "./session-store-read-candidates.js";
+import { isSessionStoreReadCandidateCurrent } from "./session-store-read-candidates.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
