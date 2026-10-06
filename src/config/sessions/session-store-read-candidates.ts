@@ -91,13 +91,7 @@ export function isSessionStoreReadCandidateCurrent(candidate: SessionStoreReadCa
   if (candidate.scope || !isSymlinkFreeWindowsShortPath(candidate.physicalPath)) {
     return false;
   }
-  const currentIdentity = inspectDatabasePathIdentitySync(currentPhysicalPath);
-  const capturedIdentity = inspectDatabasePathIdentitySync(capturedPhysicalPath);
-  return (
-    currentIdentity?.key.startsWith("file:") === true &&
-    currentIdentity.key === capturedIdentity?.key &&
-    currentIdentity.birthtime === capturedIdentity.birthtime
-  );
+  return matchesWindowsFileAlias(currentPhysicalPath, capturedPhysicalPath);
 }
 
 function resolveCapturedSessionStoreReadCandidatePhysicalPath(
@@ -115,6 +109,10 @@ function isSymlinkFreeWindowsShortPath(pathname: string): boolean {
   if (process.platform !== "win32" || !/(?:^|[\\/])[^\\/]*~\d+(?=[\\/]|$)/iu.test(pathname)) {
     return false;
   }
+  return isSymlinkFreePath(pathname);
+}
+
+function isSymlinkFreePath(pathname: string): boolean {
   const resolved = path.resolve(pathname);
   const parsed = path.parse(resolved);
   let cursor = parsed.root;
@@ -128,6 +126,34 @@ function isSymlinkFreeWindowsShortPath(pathname: string): boolean {
   return true;
 }
 
+function matchesWindowsFileAlias(capturedPath: string, selectedPath: string): boolean {
+  const shortPath = isSymlinkFreeWindowsShortPath(capturedPath)
+    ? capturedPath
+    : isSymlinkFreeWindowsShortPath(selectedPath)
+      ? selectedPath
+      : undefined;
+  if (
+    process.platform !== "win32" ||
+    !shortPath ||
+    !isSymlinkFreePath(capturedPath) ||
+    !isSymlinkFreePath(selectedPath)
+  ) {
+    return false;
+  }
+  const capturedParent = fs.statSync(path.dirname(capturedPath), { bigint: true });
+  const selectedParent = fs.statSync(path.dirname(selectedPath), { bigint: true });
+  if (capturedParent.dev !== selectedParent.dev || capturedParent.ino !== selectedParent.ino) {
+    return false;
+  }
+  const capturedIdentity = inspectDatabasePathIdentitySync(capturedPath);
+  const selectedIdentity = inspectDatabasePathIdentitySync(selectedPath);
+  return (
+    capturedIdentity?.key.startsWith("file:") === true &&
+    capturedIdentity.key === selectedIdentity?.key &&
+    capturedIdentity.birthtime === selectedIdentity.birthtime
+  );
+}
+
 /** Native discovery may use only the captured lexical and physical family together. */
 export function assertSessionStoreReadCandidate(
   pathname: string,
@@ -136,7 +162,8 @@ export function assertSessionStoreReadCandidate(
   const physicalPath = resolveIdentityPathViaExistingAncestorSync(pathname);
   for (const candidate of candidates) {
     if (
-      matchesAgentDatabaseReadCandidatePath(candidate, pathname) &&
+      (matchesAgentDatabaseReadCandidatePath(candidate, pathname) ||
+        (!candidate.scope && matchesWindowsFileAlias(candidate.physicalPath, physicalPath))) &&
       (!candidate.scope ||
         matchesAgentDatabaseReadCandidatePath(
           { ...candidate, path: resolveCapturedSessionStoreReadCandidatePhysicalPath(candidate) },

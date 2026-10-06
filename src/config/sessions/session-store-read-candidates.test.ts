@@ -35,19 +35,32 @@ test("keeps custody when a captured alias later resolves to the same file", () =
 
 test("keeps custody when Windows preserves distinct short and long spellings for one file", () => {
   const root = tempDirs.make("session-store-windows-alias-");
-  const shortDir = path.join(root, "RUNNER~1");
-  const longDir = path.join(root, "runneradmin");
-  fs.mkdirSync(shortDir);
-  fs.mkdirSync(longDir);
-  const shortPath = path.join(shortDir, "openclaw-agent.sqlite");
-  const longPath = path.join(longDir, "openclaw-agent.sqlite");
+  const shortPath = path.join(root, "OPENCL~1");
+  const longPath = path.join(root, "openclaw-agent.sqlite");
   fs.writeFileSync(shortPath, "");
   fs.linkSync(shortPath, longPath);
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-  const candidate = { path: longPath, physicalPath: shortPath };
+  const candidate = { path: shortPath, physicalPath: shortPath };
   expect(isSessionStoreReadCandidateCurrent(candidate)).toBe(true);
   expect(assertSessionStoreReadCandidate(longPath, [candidate])).toBe(longPath);
+});
+
+test("rejects a same-file Windows short path outside the captured parent", () => {
+  const root = tempDirs.make("session-store-windows-hardlink-");
+  const shortDir = path.join(root, "RUNNER~1");
+  const otherDir = path.join(root, "other");
+  fs.mkdirSync(shortDir);
+  fs.mkdirSync(otherDir);
+  const shortPath = path.join(shortDir, "openclaw-agent.sqlite");
+  const otherPath = path.join(otherDir, "openclaw-agent.sqlite");
+  fs.writeFileSync(shortPath, "");
+  fs.linkSync(shortPath, otherPath);
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+  expect(() =>
+    assertSessionStoreReadCandidate(otherPath, [{ path: shortPath, physicalPath: shortPath }]),
+  ).toThrow(/outside captured discovery custody/);
 });
 
 test("rejects a Windows short-path candidate redirected through a symlink", () => {
