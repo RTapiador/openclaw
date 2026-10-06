@@ -19,6 +19,7 @@ import { restoreSessionColdTranscript } from "../config/sessions/session-cold-st
 import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -147,11 +148,15 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
           status: "running",
         },
       );
-      for (const registeredChild of [registryChild, durableChild]) {
+      const seedChild = (registeredChild: string) => {
         seedSubagentRunForReadTest({
           runId: registeredChild,
           childSessionKey: registeredChild,
           requesterSessionKey: key,
+          requesterAgentId: "main",
+          swarmRequesterSessionKey: key,
+          collect: true,
+          groupId: "private-projection-group",
           controllerSessionKey: key,
           task: "Synthetic child",
           cleanup: "keep",
@@ -159,6 +164,9 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
           startedAt: Date.now(),
         });
         subagentRuns.commitOwnership(subagentRuns.get(registeredChild)!);
+      };
+      for (const registeredChild of [registryChild, durableChild]) {
+        seedChild(registeredChild);
       }
       const context = buildSessionListRowMetadataContext({
         now: Date.now(),
@@ -228,10 +236,24 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
           },
         },
       });
+      const missingChildren = [
+        "agent:work:subagent:incognito-missing-child",
+        "agent:work:subagent:missing-durable-child",
+      ];
+      for (const child of missingChildren) {
+        seedChild(child);
+      }
       const placements = createWorkerSessionPlacementStore();
       const projection = await createSessionRowProjection({
         cfg,
         placementFactsReader: placements,
+      });
+      const selectEntries = projection.selectEntries.bind(projection);
+      const childLookup = vi.spyOn(projection, "selectEntries").mockImplementation((query) => {
+        if (query?.key && missingChildren.includes(query.key)) {
+          throw new Error("Captured absent child was rediscovered outside its prepared owner");
+        }
+        return selectEntries(query);
       });
       let placement: Awaited<ReturnType<typeof placements.startDispatch>> | undefined;
       const readPlacement = placements.readProjection.bind(placements);
@@ -259,6 +281,29 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
                 selectedKeys.map((selectedKey) => ({ agentId: actor.agentId, key: selectedKey })),
               (read) => {
                 presentations++;
+                if (selectedKeys.includes(key)) {
+                  for (const [child, storePath, sessionId] of [
+                    [registryChild, other.path, "registry-child"],
+                    [
+                      durableChild,
+                      resolveOpenClawAgentSqlitePath({ agentId: "work", env: state.env }),
+                      "durable-registry-child",
+                    ],
+                  ] as const) {
+                    expect(read.selectEntries({ key: child })).toMatchObject([
+                      {
+                        agentId: "work",
+                        storeTarget: { agentId: "work", storePath },
+                        entry: { sessionId },
+                        storedEntry: { sessionId },
+                        sharingEntry: { sessionId },
+                      },
+                    ]);
+                  }
+                  for (const child of missingChildren) {
+                    expect(read.selectEntries({ key: child })).toEqual([]);
+                  }
+                }
                 return selectedKeys.map((selectedKey) => {
                   const row = read.describe({ agentId: actor.agentId, key: selectedKey });
                   assert(row);
@@ -331,12 +376,31 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
             expect(
               projection.selectEntries().some((row) => row.key === key || row.key === durableRoot),
             ).toBe(false);
-            await restoreSessionColdTranscript({
-              agentId: actor.agentId,
-              storePath: actor.path,
-              sessionKey: key,
-              sessionId: "prepared-row",
-            });
+            const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+            process.env.OPENCLAW_STATE_DIR = `${state.env.OPENCLAW_STATE_DIR}-moved`;
+            try {
+              await restoreSessionColdTranscript({
+                agentId: actor.agentId,
+                storePath: actor.path,
+                sessionKey: key,
+                sessionId: "prepared-row",
+              });
+              expect(
+                projection
+                  .findBySessionId({ sessionId: "prepared-row", federated: true })
+                  .map((row) => row.key),
+              ).toEqual([key]);
+              expect(
+                projection.capture({ agentId: actor.agentId, key, storePath: actor.path })?.entry
+                  ?.sessionId,
+              ).toBe("prepared-row");
+            } finally {
+              if (previousStateDir === undefined) {
+                delete process.env.OPENCLAW_STATE_DIR;
+              } else {
+                process.env.OPENCLAW_STATE_DIR = previousStateDir;
+              }
+            }
             expect(
               await readSqliteSessionArchivePruning({
                 agentId: actor.agentId,
@@ -378,6 +442,7 @@ it("materializes actor-prepared private entries and lineage without host SQLite"
         });
       } finally {
         placementGap.mockRestore();
+        childLookup.mockRestore();
         projection.dispose();
       }
       for (const change of ["abort", "config", "dispose"] as const) {

@@ -570,9 +570,10 @@ function readIncognitoSessionRow(params: {
   cfg: records.Inputs["cfg"];
   key: string;
   agentId: string;
+  storePath?: string;
 }) {
-  const { cfg, key, agentId } = params;
-  const binding = captureIncognitoSessionBinding({ agentId, sessionKey: key });
+  const { cfg, key, agentId, storePath } = params;
+  const binding = captureIncognitoSessionBinding({ agentId, sessionKey: key, storePath });
   if (binding) {
     const { actor } = binding;
     const entry = actor.sessions.readSharing(key)?.entry;
@@ -628,14 +629,16 @@ export function findSessionRowById(
   if (owner.disposed) {
     return [];
   }
+  const privateBinding =
+    query.agentId && query.storePath ? captureIncognitoSessionBinding(query) : undefined;
   if (
     query.agentId &&
     query.storePath &&
-    isIncognitoOpenClawAgentSqlitePath(query.storePath, { agentId: query.agentId })
+    (privateBinding ||
+      isIncognitoOpenClawAgentSqlitePath(query.storePath, { agentId: query.agentId }))
   ) {
-    const binding = captureIncognitoSessionBinding(query);
-    const key = binding
-      ? binding.actor.sessions.deadlines().find((fact) => fact.sessionId === query.sessionId)
+    const key = privateBinding
+      ? privateBinding.actor.sessions.deadlines().find((fact) => fact.sessionId === query.sessionId)
           ?.sessionKey
       : resolveSessionKeyBySessionId(query);
     if (!key || (query.federated && isInternalSessionEffectsKey(key))) {
@@ -705,7 +708,7 @@ export function lookupSessionRow(
     agentId,
   });
   if (isIncognitoSessionKey(key)) {
-    return readIncognitoSessionRow({ cfg: owner.cfg, key, agentId });
+    return readIncognitoSessionRow({ cfg: owner.cfg, key, agentId, storePath: query.storePath });
   }
   const candidates = owner.matching({ ...query, key }).filter((row) => row.agentId === agentId);
   return records.first(candidates, owner.storePaths);

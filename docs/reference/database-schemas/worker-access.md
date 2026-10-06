@@ -720,6 +720,8 @@ and cleanup. Keyed placement publications invalidate the transient read before
 presentation; stale preparation retries before invoking the consumer. Private
 rows stay outside the resident roster. Retained Gateway lookups consume the same
 actor and revoke their validation callback when consumption ends.
+Captured child rows retain their own agent and physical store; a captured missing
+child remains absent throughout presentation.
 
 The all-actor deadline sidecar captures existing execution topology before
 awaiting acquisition and checks the same incarnation before installing each

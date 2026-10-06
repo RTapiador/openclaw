@@ -99,21 +99,15 @@ export function readPreparedSessionRows<T>(
       for (const group of row?.materialized.row.swarm?.groups ?? []) {
         for (const child of group.children ?? []) {
           if (!childSelections.has(child.sessionKey)) {
-            const entry = row?.preparedPrivate?.entries[child.sessionKey];
+            const related = row?.preparedPrivate;
+            const prepared = related?.relatedRows[child.sessionKey];
             childSelections.set(
               child.sessionKey,
-              entry
-                ? [
-                    {
-                      ...records.create({
-                        key: child.sessionKey,
-                        agentId: row.agentId,
-                        storeTarget: row.storeTarget,
-                      }),
-                      entry,
-                    },
-                  ]
-                : owner.selectEntries({ key: child.sessionKey }),
+              prepared
+                ? [{ ...records.create(prepared, prepared.entry), entry: prepared.entry }]
+                : related
+                  ? []
+                  : owner.selectEntries({ key: child.sessionKey }),
             );
           }
         }

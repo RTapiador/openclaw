@@ -276,7 +276,7 @@ async function withRetainedIncognitoSessionRow<T>(
   consume: (prepared: {
     present: () => Row | undefined;
     durable: Array<{ key: string; agentId: string; preserveQualifiedAddress: boolean }>;
-    entries: Record<string, NonNullable<Row["entry"]>>;
+    relatedRows: NonNullable<Row["preparedPrivate"]>["relatedRows"];
     assertCurrent: () => void;
   }) => Promise<T>,
   retained: IncognitoRowResources,
@@ -322,7 +322,7 @@ async function withRetainedIncognitoSessionRow<T>(
           return await consume({
             present: () => undefined,
             durable: [],
-            entries: {},
+            relatedRows: {},
             assertCurrent,
           });
         } finally {
@@ -358,8 +358,16 @@ async function withRetainedIncognitoSessionRow<T>(
               (workspace) => workspace.workspaceId === facts.entry.repositoryWorkspaceId,
             ) ?? null;
         }
-        const relatedEntries = Object.fromEntries(
-          value.children.map((child) => [child.sessionKey, child.entry]),
+        const relatedRows = Object.fromEntries(
+          value.children.map((child) => [
+            child.sessionKey,
+            {
+              key: child.sessionKey,
+              agentId: actor.agentId,
+              storeTarget: { agentId: actor.agentId, storePath: actor.path },
+              entry: child.entry,
+            },
+          ]),
         );
         const present = () => {
           assertCurrent();
@@ -372,7 +380,7 @@ async function withRetainedIncognitoSessionRow<T>(
             membership: actor.sessions.readSharing(key)?.membership,
             source: { identity: actor.identity.incarnation, assertCurrent },
             prepared: {
-              relatedEntries,
+              relatedRows,
               databaseFacts: facts,
               titleFields: value.titleFields,
               terminalModel: value.terminalModel,
@@ -385,7 +393,7 @@ async function withRetainedIncognitoSessionRow<T>(
             ...(parentKey ? [parentKey] : []),
             ...listSubagentSessionListRunsForControllers([key]).map((run) => run.childSessionKey),
           ]),
-        ].filter((relatedKey) => relatedKey !== key && !relatedEntries[relatedKey]);
+        ].filter((relatedKey) => relatedKey !== key && !relatedRows[relatedKey]);
         const privateKeys = relatedKeys.filter(isIncognitoSessionKey);
         const durable = relatedKeys
           .filter((relatedKey) => !isIncognitoSessionKey(relatedKey))
@@ -402,8 +410,7 @@ async function withRetainedIncognitoSessionRow<T>(
             preserveQualifiedAddress: false,
           });
         }
-        const withDurable = () =>
-          consume({ present, durable, entries: relatedEntries, assertCurrent });
+        const withDurable = () => consume({ present, durable, relatedRows, assertCurrent });
         const withPrivate = async (index: number): Promise<T> => {
           const relatedKey = privateKeys[index];
           if (!relatedKey) {
@@ -434,7 +441,12 @@ async function withRetainedIncognitoSessionRow<T>(
               assertions.push(() => relatedActor.assertReadable(), prepared.snapshot.assertCurrent);
               retained.assertions.push(prepared.snapshot.assertSettledCurrent);
               if (prepared.entry) {
-                relatedEntries[relatedKey] = prepared.entry;
+                relatedRows[relatedKey] = {
+                  key: relatedKey,
+                  agentId: relatedActor.agentId,
+                  storeTarget: { agentId: relatedActor.agentId, storePath: relatedActor.path },
+                  entry: prepared.entry,
+                };
               }
               return withPrivate(index + 1);
             });
@@ -555,8 +567,14 @@ function withIncognitoSessionRows<T>(
         for (const [targetIndex, selected] of [target, ...relatedTargets].entries()) {
           const { row, target: requested } = durable[targetIndex]!;
           const entry = selected.store[selected.canonicalKey];
-          if (entry && !row.entries[requested.key]) {
-            row.entries[requested.key] = entry;
+          if (entry && !row.relatedRows[requested.key]) {
+            const source = expectDefined(selected.readSource, "captured related session source");
+            row.relatedRows[requested.key] = {
+              key: selected.canonicalKey,
+              agentId: selected.agentId,
+              storeTarget: { agentId: source.agentId, storePath: source.path },
+              entry,
+            };
           }
         }
         const result = finish();

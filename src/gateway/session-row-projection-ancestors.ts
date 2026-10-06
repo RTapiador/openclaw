@@ -40,7 +40,7 @@ export function createSessionRowRelationReads(owner: {
         return undefined;
       }
       const binding = captureIncognitoSessionBinding({
-        agentId: query.agentId,
+        ...query,
         sessionKey: query.key,
       });
       return owner.inOwnerContext(() => {
