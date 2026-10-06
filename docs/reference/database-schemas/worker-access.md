@@ -743,6 +743,9 @@ rows stay outside the resident roster. Retained Gateway lookups consume the same
 actor and revoke their validation callback when consumption ends.
 Captured child rows retain their own agent and physical store; a captured missing
 child remains absent throughout presentation.
+Ordinary unbound reads keep their synchronous completion boundary; a later topology
+publication cannot reject or replay an already consumed result. Actor-bound reads
+retain their final authority checks through asynchronous cleanup.
 
 The all-actor deadline sidecar captures existing execution topology before
 awaiting acquisition and checks the same incarnation before installing each

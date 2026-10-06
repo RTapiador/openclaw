@@ -433,40 +433,40 @@ export function createSessionRowPlacementProjection(
           return Promise.resolve(deferred);
         }
         const cfg = projection.state.cfg;
-        return withBoundIncognitoSessionRows(
-          cfg,
-          preparedQueries,
-          (privateRows) => {
-            assertActive();
-            const privateIds = [...privateRows.values()].flatMap((row) =>
-              row?.entry ? [row.entry.sessionId] : [],
+        const consumePrepared = (
+          privateRows?: ReadonlyMap<string, Row | undefined>,
+        ): ReturnType<typeof readPreparedSessionRows<T>> | typeof stalePrivatePreparation => {
+          assertActive();
+          const privateIds = privateRows
+            ? [...privateRows.values()].flatMap((row) => (row?.entry ? [row.entry.sessionId] : []))
+            : [];
+          if (
+            !placementCurrent() ||
+            projection.state.cfg !== cfg ||
+            missing(privateIds).some((id) => !placement?.has(id))
+          ) {
+            return stalePrivatePreparation;
+          }
+          const previous = exact;
+          if (placement) {
+            exact = placement;
+          }
+          try {
+            return readPreparedSessionRows(
+              projection,
+              isActive,
+              () => preparedQueries,
+              (read) => consume(read, preparedQueries),
+              privateRepositories,
+              privateRows,
             );
-            if (
-              !placementCurrent() ||
-              projection.state.cfg !== cfg ||
-              missing(privateIds).some((id) => !placement?.has(id))
-            ) {
-              return stalePrivatePreparation;
-            }
-            const previous = exact;
-            if (placement) {
-              exact = placement;
-            }
-            try {
-              return readPreparedSessionRows(
-                projection,
-                isActive,
-                () => preparedQueries,
-                (read) => consume(read, preparedQueries),
-                privateRepositories,
-                privateRows,
-              );
-            } finally {
-              exact = previous;
-            }
-          },
-          env,
-        );
+          } finally {
+            exact = previous;
+          }
+        };
+        return binding
+          ? withBoundIncognitoSessionRows(cfg, preparedQueries, consumePrepared, env)
+          : consumePrepared();
       };
       const prepare = () => {
         const pending = prepareFacts();
@@ -477,6 +477,10 @@ export function createSessionRowPlacementProjection(
         return prepareSelectedRows();
       };
       const assertPublicationCurrent = (placementCurrent = true) => {
+        // Only actor-backed preparation retains resources past the synchronous consumer.
+        if (!binding) {
+          return;
+        }
         assertActive();
         if (!placementCurrent || projection.state.cfg !== selectedConfig) {
           throw new Error("Session row facts changed during cleanup");
