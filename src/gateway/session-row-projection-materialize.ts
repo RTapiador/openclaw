@@ -695,8 +695,9 @@ export function lookupSessionRow(
     stores: ReadonlyMap<string, records.SessionRowStore>;
   },
 ) {
+  const { agentId } = query;
   const paths = query.storePath
-    ? (owner.scope?.physicalPaths(query.storePath, query.agentId) ?? [query.storePath])
+    ? (owner.scope?.physicalPaths(query.storePath, agentId) ?? [query.storePath])
     : undefined;
   let key = query.key;
   do {
@@ -705,7 +706,7 @@ export function lookupSessionRow(
       for (const storePath of paths ?? owner.stores.keys()) {
         for (const id of candidates) {
           const row = owner.rows.get(id);
-          if (row?.agentId === query.agentId && row.storeTarget.storePath === storePath) {
+          if (row?.agentId === agentId && row.storeTarget.storePath === storePath) {
             return row;
           }
         }
@@ -717,15 +718,10 @@ export function lookupSessionRow(
     key = resolveStoredSessionKeyForAgentStore({
       cfg: owner.cfg,
       sessionKey: key,
-      agentId: query.agentId,
+      agentId,
     });
     if (isIncognitoSessionKey(key)) {
-      return readIncognitoSessionRow({
-        cfg: owner.cfg,
-        key,
-        agentId: query.agentId,
-        storePath: query.storePath,
-      });
+      return readIncognitoSessionRow({ cfg: owner.cfg, key, agentId, storePath: query.storePath });
     }
   } while (key !== query.key);
   return undefined;
