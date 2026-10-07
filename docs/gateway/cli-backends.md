@@ -387,9 +387,9 @@ For JSONL, banner scanning starts fresh on each line.
 Claude streaming limits discount recognized partial-message envelopes while
 counting their text, thinking, and tool-input payloads. Tool-result payloads are
 handed to consumers without being retained, so they do not count toward the output
-budget; their IDs, metadata, and frame still do. Cumulative snapshots still count.
-Single-line limits and bounded frame counts remain active, including for empty or
-unrecognized events.
+budget; their IDs, metadata, padding, and frame still do. Cumulative snapshots
+still count. Single-line limits and bounded frame counts remain active, including
+for empty or unrecognized events.
 
 Input modes:
 
