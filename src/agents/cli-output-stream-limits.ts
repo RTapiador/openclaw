@@ -85,6 +85,40 @@ export function measureClaudePartialMessage(
   );
 }
 
+/** Discount tool-result payloads, which are handed to consumers and never retained. */
+export function measureClaudeToolResultMessage(
+  parsed: Record<string, unknown>,
+  rawLine: string,
+): number | undefined {
+  const content = isRecord(parsed.message) ? parsed.message.content : undefined;
+  if (
+    parsed.type !== "user" ||
+    !Array.isArray(content) ||
+    content.length === 0 ||
+    content.some((block) => !isRecord(block) || block.type !== "tool_result")
+  ) {
+    return undefined;
+  }
+  // Claude Code echoes each payload under `message.content` and `tool_use_result`.
+  // Everything else on the line (IDs, session metadata, padding) still counts,
+  // and the record still counts as an ordinary frame. JSON.stringify never
+  // encodes a payload longer than the wire did, so the discount cannot overshoot.
+  const payloads = [
+    ...(content as Record<string, unknown>[]).map((block) => block.content),
+    parsed.tool_use_result,
+  ];
+  let payloadChars = 0;
+  try {
+    for (const payload of payloads) {
+      payloadChars += payload === undefined ? 0 : JSON.stringify(payload).length;
+    }
+  } catch {
+    // A payload too deep to re-serialize falls back to raw accounting.
+    return undefined;
+  }
+  return Math.max(32, rawLine.length - payloadChars);
+}
+
 /** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */
 export function frameBoundedCliJsonlChunk(
   state: { pending: string },
